@@ -1,2 +1,3 @@
 .prettierignore
 __pycache__/
+settings.json
