@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from itertools import combinations
+from enums import ConstraintsEnum, KropkiTypeEnum
 
 
 class Constraint(ABC):
@@ -140,11 +141,11 @@ class KropkiDotConstraint(Constraint):
         val1 = self.affected_cells[0].value
         val2 = self.affected_cells[1].value
 
-        if self.type == 'white':
+        if self.type == KropkiTypeEnum.WHITE_DOT:
             if val1 == 0 or val2 == 0:
                 return True # Cannot verify yet
             return abs(val1 - val2) == 1
-        elif self.type == 'black':
+        elif self.type == KropkiTypeEnum.BLACK_DOT:
             impossible_nums = [5, 7, 9]
             if val1 in impossible_nums or val2 in impossible_nums:
                 return False
@@ -153,7 +154,7 @@ class KropkiDotConstraint(Constraint):
             return (val1 == 2 * val2) or (val2 == 2 * val1)
     
     def propagate(self):
-        if self.type == 'white':
+        if self.type == KropkiTypeEnum.WHITE_DOT:
             # For white dot, possible values must be consecutive
             cell1, cell2 = self.affected_cells
             if cell1.value == 0 and cell2.value == 0:
@@ -172,7 +173,7 @@ class KropkiDotConstraint(Constraint):
                 cell1.possible_values = {cell2.value - 1, cell2.value + 1} & cell1.possible_values
             elif cell2.value == 0:
                 cell2.possible_values = {cell1.value - 1, cell1.value + 1} & cell2.possible_values
-        elif self.type == 'black':
+        elif self.type == KropkiTypeEnum.BLACK_DOT:
             # For black dot, one number must be double the other
             cell1, cell2 = self.affected_cells
             if cell1.value == 0 and cell2.value == 0:

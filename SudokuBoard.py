@@ -1,3 +1,5 @@
+import copy
+
 from Constraints import *
 from SudokuCell import SudokuCell
 
@@ -13,14 +15,19 @@ class SudokuBoard():
 
         return min_cell
     
-    def solve(self, update_callback):
-        least_cell = self.find_least_num_possible_cell()
-        while len(least_cell.possible_values) == 1:
-            least_cell.set_value(least_cell.possible_values.pop())
-            update_callback(least_cell.row, least_cell.col, least_cell.value)
-            least_cell = self.find_least_num_possible_cell()
-            if least_cell is None:
-                break
+    def is_solved(self):
+        #Check that each cell is filled
+        for row in self.board:
+            for cell in row:
+                if cell.value == 0:
+                    return False
+
+        #Now check that all constraints are satisfied
+        for constraint in self.constraints:
+            if not constraint.verify_constraint():
+                return False
+
+        return True    
 
     def create_empty_board(self):
         #Create empty board
