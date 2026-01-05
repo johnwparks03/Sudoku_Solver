@@ -23,3 +23,18 @@ class GUIState(Enum):
     ADDING_WHITE_KROPKI_DOT = 'adding_white_kropki_dot' #When the user is adding white kropki dot constraints
     ADDING_BLACK_KROPKI_DOT = 'adding_black_kropki_dot' #When the user is adding black kropki dot constraints
     ADDING_KILLER_CAGE = 'adding_killer_cage' #When the user is adding killer cage constraints
+
+class GUIButtons(Enum):
+    SOLVE = 'solve'
+    CLEAR = 'clear'
+    LOAD_SUDOKU = 'load_sudoku'
+    LEFT_ARROW = 'left_arrow'
+    RIGHT_ARROW = 'right_arrow'
+    ADD_CONSTRAINTS = 'add_constraints'
+    WHITE_KROPKI_DOT = 'white_kropki_dot'
+    BLACK_KROPKI_DOT = 'black_kropki_dot'
+    KILLER_CAGE = 'killer_cage'
+    DONE_ADDING_CONSTRAINTS = 'done_adding_constrains'
+    ADD_SELECTED_CONSTRAINT = 'add_selected_constraint'
+    CANCEL_SELECTED_CONSTRAINT = 'cancel_selected_constraint'
+    SAVE = 'SAVE'

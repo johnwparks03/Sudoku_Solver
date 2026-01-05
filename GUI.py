@@ -1,466 +1,815 @@
 import copy
-import json
-import time
-import tkinter as tk
+import sys
 from collections import defaultdict
-from enum import Enum
-from tkinter import messagebox
 
+from PyQt5.QtCore import QRectF, Qt, QTimer
+from PyQt5.QtGui import QBrush, QColor, QFont, QIntValidator, QPen
+from PyQt5.QtWidgets import (
+    QApplication,
+    QGraphicsEllipseItem,
+    QGraphicsScene,
+    QGraphicsView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-
+import predefined_sudoku_utils
+import solver
 from Constraints import *
 from enums import *
 from SudokuBoard import SudokuBoard
 
-PREDEFINED_SUDOKUS_FILE = "predefined_sudokus.json"
 
-class SudokuGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Sudoku Solver")
-        self.root.config(bg='lightblue')
+class SudokuGUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
 
         #Define which buttons are enabled during which states
         self.state_button_config = {
-            GUIState.EMPTY_BOARD: ['solve', 'clear', 'load_sudoku', 'add_constraints'],
+            GUIState.EMPTY_BOARD: [GUIButtons.SOLVE.value, GUIButtons.CLEAR.value, GUIButtons.LOAD_SUDOKU.value, GUIButtons.ADD_CONSTRAINTS.value],
             GUIState.SOLVING: [],
-            GUIState.SOLVED: ['clear', 'load_sudoku', 'add_constraints'],
-            GUIState.INCORRECT_SOLVE: ['clear', 'load_sudoku'],
-            GUIState.EDITED: ['solve', 'clear', 'load_sudoku', 'save', 'add_constraints'],
-            GUIState.LOADING_SUDOKU: ['solve', 'clear', 'right_arrow', 'left_arrow', 'add_constraints'],
-            GUIState.ADDING_CONSTRAINTS: ['white_kropki_dot', 'black_kropki_dot', 'killer_cage', 'done_adding_constraints'],
-            GUIState.ADDING_WHITE_KROPKI_DOT: ['add', 'cancel'],
-            GUIState.ADDING_BLACK_KROPKI_DOT: ['add', 'cancel'],
-            GUIState.ADDING_KILLER_CAGE: ['add', 'cancel'],
+            GUIState.SOLVED: [GUIButtons.CLEAR.value, GUIButtons.LOAD_SUDOKU.value, GUIButtons.ADD_CONSTRAINTS.value],
+            GUIState.INCORRECT_SOLVE: [GUIButtons.CLEAR.value, GUIButtons.LOAD_SUDOKU.value],
+            GUIState.EDITED: [GUIButtons.SOLVE.value, GUIButtons.CLEAR.value, GUIButtons.LOAD_SUDOKU.value, GUIButtons.SAVE.value, GUIButtons.ADD_CONSTRAINTS.value],
+            GUIState.LOADING_SUDOKU: [GUIButtons.SOLVE.value, GUIButtons.CLEAR.value, GUIButtons.LEFT_ARROW.value, GUIButtons.RIGHT_ARROW.value, GUIButtons.ADD_CONSTRAINTS.value],
+            GUIState.ADDING_CONSTRAINTS: [GUIButtons.WHITE_KROPKI_DOT.value, GUIButtons.BLACK_KROPKI_DOT.value, GUIButtons.KILLER_CAGE.value, GUIButtons.DONE_ADDING_CONSTRAINTS.value],
+            GUIState.ADDING_WHITE_KROPKI_DOT: [GUIButtons.ADD_SELECTED_CONSTRAINT.value, GUIButtons.CANCEL_SELECTED_CONSTRAINT.value],
+            GUIState.ADDING_BLACK_KROPKI_DOT: [GUIButtons.ADD_SELECTED_CONSTRAINT.value, GUIButtons.CANCEL_SELECTED_CONSTRAINT.value],
+            GUIState.ADDING_KILLER_CAGE: [GUIButtons.ADD_SELECTED_CONSTRAINT.value, GUIButtons.CANCEL_SELECTED_CONSTRAINT.value],
         }
         self.state = GUIState.EMPTY_BOARD
 
-        # 2D array to store entry widgets
-        self.cells = [[None for _ in range(9)] for _ in range(9)]
-
+        self.cells = []
         self.buttons = {}
-
-        #Create the main UI
-        self.create_grid()
-        self.create_buttons()
 
         self.sudoku_board = SudokuBoard()
 
-        self.predefined_sudokus = self.create_predefined_sudokus()
-        self.current_predefined_index = 1
+        self.predefined_sudokus = predefined_sudoku_utils.create_predefined_sudokus()
+        self.current_predefined_sudoku_index = 0
 
         self.constraint_selected_cells = []
         self.selected_constraint_type = None
+        self.edit_mode = True #True when user can edit cells, False when user can select cells
+
+        self.setWindowTitle("Sudoku Solver")
+        self.cell_size = 60
+        self.grid_size = 9
+
+        central_widget = QWidget()
+        central_widget.setStyleSheet("background-color: lightblue")
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+
+        #Create the graphics view and scene
+        self.scene = QGraphicsScene()
+        self.view = QGraphicsView(self.scene)
+        self.view.setBackgroundBrush(QBrush(QColor("#f0f0f0")))
+
+        #Set the size of the scene
+        total_size = self.cell_size * self.grid_size
+        self.scene.setSceneRect(0, 0, total_size, total_size)
+        
+
+        self.draw_grid()
+        self.create_cells()
+
+        self.view.setFixedSize(total_size + 20, total_size + 20)
+        self.adjustSize()
+
+        main_layout.addWidget(self.view)
+
+        self.button_row_1 = QHBoxLayout()
+        self.button_row_2 = QHBoxLayout()
+        self.button_row_3 = QHBoxLayout()
+
+        self.create_buttons()
+
+        main_layout.addLayout(self.button_row_1)
+        main_layout.addLayout(self.button_row_2)
+        main_layout.addLayout(self.button_row_3)
+
+        #Create toast notification label
+        self.toast = QLabel(self)
+        self.toast.setAlignment(Qt.AlignCenter)
+        self.toast.setStyleSheet("""
+            QLabel {
+                background-color: lightgray;
+                color: black;
+                padding: 15px 30px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+        """)
+        self.toast.hide()
+
+    def refresh(self):
+        self.scene.update()
+        self.view.viewport().update()
+        QApplication.processEvents()
+
+    def show_toast_notification(self, message, duration=1000):
+        self.toast.setText(message)
+        self.toast.adjustSize()
+
+        x = (self.width() - self.toast.width()) // 2
+        y = self.height() - self.toast.height() - self.height() // 2
+        self.toast.move(x, y)
+        
+        self.toast.show()
+
+        self.toast.mousePressEvent = lambda event: self.toast.hide()
+
+        QTimer.singleShot(duration, self.toast.hide)
 
     def set_state(self, new_state):
-        prev_state = self.state
-        self.state = new_state
-    
         print(new_state)
 
-        #Hide/show buttons based on state transitions
+        prev_state = self.state
+        self.state = new_state
+
+        #Hide/Show arrow buttons to cycle predefined sudokus
         if new_state == GUIState.LOADING_SUDOKU:
+            #Hide load sudoku button
+            self.buttons[GUIButtons.LOAD_SUDOKU.value].hide()
+
             #Show arrow buttons
-            self.buttons['right_arrow'].grid()
-            self.buttons['left_arrow'].grid()
-
-            #Hide Load Sudoku button text
-            self.buttons['load_sudoku'].grid_remove()
-        elif prev_state == GUIState.LOADING_SUDOKU and new_state != GUIState.LOADING_SUDOKU:
+            self.buttons[GUIButtons.LEFT_ARROW.value].show()
+            self.buttons[GUIButtons.RIGHT_ARROW.value].show()
+        elif prev_state == GUIState.LOADING_SUDOKU:
             #Hide arrow buttons
-            self.buttons['right_arrow'].grid_remove()
-            self.buttons['left_arrow'].grid_remove()
+            self.buttons[GUIButtons.LEFT_ARROW.value].hide()
+            self.buttons[GUIButtons.RIGHT_ARROW.value].hide()
 
-            #Unhide Load Sudoku button text
-            self.buttons['load_sudoku'].grid()
+            #Show load sudoku button
+            self.buttons[GUIButtons.LOAD_SUDOKU.value].show()
 
-
+        #Hide/Show constraint buttons
         if new_state == GUIState.ADDING_CONSTRAINTS:
+            #Hide buttons depending on previous state
+            if prev_state in (GUIState.ADDING_WHITE_KROPKI_DOT, GUIState.ADDING_BLACK_KROPKI_DOT, GUIState.ADDING_KILLER_CAGE):
+                self.buttons[GUIButtons.ADD_SELECTED_CONSTRAINT.value].hide()
+                self.buttons[GUIButtons.CANCEL_SELECTED_CONSTRAINT.value].hide()
+            else:
+                self.buttons[GUIButtons.SOLVE.value].hide()
+                self.buttons[GUIButtons.CLEAR.value].hide()
+                self.buttons[GUIButtons.LOAD_SUDOKU.value].hide()
+                self.buttons[GUIButtons.ADD_CONSTRAINTS.value].hide()
+                self.buttons[GUIButtons.SAVE.value].hide()
+
             #Show constraint buttons
-            self.buttons['white_kropki_dot'].grid()
-            self.buttons['black_kropki_dot'].grid()
-            self.buttons['killer_cage'].grid()
-            self.buttons['done_adding_constraints'].grid()
-
-            #Hide other buttons
-            if prev_state == GUIState.ADDING_BLACK_KROPKI_DOT or prev_state == GUIState.ADDING_WHITE_KROPKI_DOT or prev_state == GUIState.ADDING_KILLER_CAGE:
-                self.buttons['add'].grid_remove()
-                self.buttons['cancel'].grid_remove()
-            else:
-                self.buttons['solve'].grid_remove()
-                self.buttons['clear'].grid_remove()
-                self.buttons['load_sudoku'].grid_remove()
-                self.buttons['save'].grid_remove()
-                self.buttons['add_constraints'].grid_remove()
-        elif new_state != GUIState.ADDING_CONSTRAINTS and prev_state == GUIState.ADDING_CONSTRAINTS:
+            self.buttons[GUIButtons.WHITE_KROPKI_DOT.value].show()
+            self.buttons[GUIButtons.BLACK_KROPKI_DOT.value].show()
+            self.buttons[GUIButtons.KILLER_CAGE.value].show()
+            self.buttons[GUIButtons.DONE_ADDING_CONSTRAINTS.value].show()
+        elif prev_state == GUIState.ADDING_CONSTRAINTS:
             #Hide constraint buttons
-            self.buttons['white_kropki_dot'].grid_remove()
-            self.buttons['black_kropki_dot'].grid_remove()
-            self.buttons['killer_cage'].grid_remove()
-            self.buttons['done_adding_constraints'].grid_remove()
+            self.buttons[GUIButtons.WHITE_KROPKI_DOT.value].hide()
+            self.buttons[GUIButtons.BLACK_KROPKI_DOT.value].hide()
+            self.buttons[GUIButtons.KILLER_CAGE.value].hide()
+            self.buttons[GUIButtons.DONE_ADDING_CONSTRAINTS.value].hide()
 
-            #Show other buttons
-            if new_state == GUIState.ADDING_BLACK_KROPKI_DOT or new_state == GUIState.ADDING_WHITE_KROPKI_DOT or new_state == GUIState.ADDING_KILLER_CAGE:
-                self.buttons['add'].grid()
-                self.buttons['cancel'].grid()
+            #Show buttons depending on new state
+            if new_state in (GUIState.ADDING_WHITE_KROPKI_DOT, GUIState.ADDING_BLACK_KROPKI_DOT, GUIState.ADDING_KILLER_CAGE):
+                self.buttons[GUIButtons.ADD_SELECTED_CONSTRAINT.value].show()
+                self.buttons[GUIButtons.CANCEL_SELECTED_CONSTRAINT.value].show()
             else:
-                self.buttons['solve'].grid()
-                self.buttons['clear'].grid()
-                self.buttons['load_sudoku'].grid()
-                self.buttons['save'].grid()
-                self.buttons['add_constraints'].grid()
+                self.buttons[GUIButtons.SOLVE.value].show()
+                self.buttons[GUIButtons.CLEAR.value].show()
+                self.buttons[GUIButtons.LOAD_SUDOKU.value].show()
+                self.buttons[GUIButtons.ADD_CONSTRAINTS.value].show()
+                self.buttons[GUIButtons.SAVE.value].show()
 
+        #Disable/Enable buttons depending on new state
         state_config = self.state_button_config.get(new_state, {})
-        #Disable/enable buttons based on new state
         for btn_key, btn in self.buttons.items():
             if btn_key in state_config:
-                btn.config(state=tk.NORMAL)
+                btn.setDisabled(False)
             else:
-                btn.config(state=tk.DISABLED, disabledforeground='black')
+                btn.setDisabled(True)
 
-    def create_predefined_sudokus(self):
-        #Return a list of SudokueBoard objects so that we cna loop through them with Load Sudoku button
-        loaded_sudokus = []
-        with open(PREDEFINED_SUDOKUS_FILE, 'r') as data:
-            sudoku_data = json.load(data)
-            predefined_sudokus = sudoku_data['predefined_sudokus']
+    def draw_grid(self):
+        for i in range(10):
+            if i % 3 == 0:
+                pen = QPen(Qt.black, 3)
+            else:
+                pen = QPen(Qt.gray, 2)
 
-            for predefined_sudoku in predefined_sudokus:
-                sudoku_board = SudokuBoard()
-                for row in range(9):
-                    for col in range(9):
-                        value = predefined_sudoku['board'][row][col]
-                        if value != 0:
-                            sudoku_board.board[row][col].set_value(value)
+            #Horizontal
+            self.scene.addLine(0, i * self.cell_size, self.grid_size * self.cell_size, i * self.cell_size, pen)
 
-                for constraint_type, constraint in predefined_sudoku['constraints'].items():
-                    match constraint_type:
-                        case ConstraintsEnum.WHITE_KROPKI_DOT.value:
-                            for affected_cells in constraint:
-                                cell1_row, cell1_col = affected_cells[0]
-                                cell2_row, cell2_col = affected_cells[1]
+            #Vertical
+            self.scene.addLine(i * self.cell_size, 0, i * self.cell_size, self.grid_size * self.cell_size, pen)
 
-                                cell1 = sudoku_board.board[cell1_row][cell1_col]
-                                cell2 = sudoku_board.board[cell2_row][cell2_col]
+    def create_cells(self):
+        for row in range(9):
+            row_cells = []
+            for col in range(9):
+                cell = QLineEdit()
+                cell.setMaxLength(1)
+                cell.setAlignment(Qt.AlignCenter)
+                cell.setFont(QFont('Arial', 18, QFont.Bold))
+                cell.setStyleSheet(
+                    """
+                    QLineEdit {
+                        background-color: transparent;
+                        border: none;
+                        color: black;
+                    }
+                    """
+                )
 
-                                new_constraint = KropkiDotConstraint(
-                                    cells=[cell1, cell2],
-                                    type=KropkiTypeEnum.WHITE_DOT
-                                )
+                cell.setProperty("row", row)
+                cell.setProperty("col", col)
+                
+                validator = QIntValidator(1, 9, cell)
+                cell.setValidator(validator)
 
-                                sudoku_board.constraints.append(new_constraint)
-                                cell1.constraints.append(new_constraint)
-                                cell2.constraints.append(new_constraint)
+                #Cell position
+                x = col * self.cell_size
+                y = row * self.cell_size
 
-                        case ConstraintsEnum.BLACK_KROPKI_DOT.value:
-                            for affected_cells in constraint:
-                                cell1_row, cell1_col = affected_cells[0]
-                                cell2_row, cell2_col = affected_cells[1]
+                #Add cell to the scene
+                proxy = self.scene.addWidget(cell)
+                proxy.setGeometry(QRectF(x, y, self.cell_size, self.cell_size))
 
-                                cell1 = sudoku_board.board[cell1_row][cell1_col]
-                                cell2 = sudoku_board.board[cell2_row][cell2_col]
+                cell.textEdited.connect(lambda text, r=row, c=col: self.cell_edited(r, c, text))
+                cell.mousePressEvent = lambda event, r=row, c=col: self.on_cell_click(event, r, c)
 
-                                new_constraint = KropkiDotConstraint(
-                                    cells=[cell1, cell2],
-                                    type=KropkiTypeEnum.BLACK_DOT
-                                )
+                row_cells.append(cell)
 
-                                sudoku_board.constraints.append(new_constraint)
-                                cell1.constraints.append(new_constraint)
-                                cell2.constraints.append(new_constraint)
-                        case ConstraintsEnum.KILLER_CAGE.value:
-                            print("IMPLEMENT FUNCTIONALITY TO LOAD KILLER AGE CONSTRAINTS")
-                        case _:
-                            continue
+            self.cells.append(row_cells)
 
-                loaded_sudokus.append(sudoku_board)
-        return loaded_sudokus
+    #region Cell Helper Methods
+    def cell_edited(self, row, col, new_value):
+        self.set_state(GUIState.EDITED)
 
-    def create_grid(self):
-        #Main grid frame
-        grid_frame = tk.Frame(self.root, bg="black")
-        grid_frame.pack(padx=10, pady=10)
-
-        #Create boxes
-        for box_row in range(3):
-            for box_col in range(3):
-                box_frame  =tk.Frame(grid_frame, borderwidth=0, relief="solid", bg="gray")
-                box_frame.grid(row=box_row, column=box_col, padx=0.5, pady=0.5)
-
-                #Create cells within box
-                for cell_row in range(3):
-                    for cell_col in range(3):
-                        cell = tk.Entry(
-                            box_frame,
-                            width=3,
-                            font=('Arial', 18, 'bold'),
-                            justify='center',
-                            borderwidth=0,
-                            relief="solid"
-                        )
-                        cell.grid(row=cell_row, column=cell_col, padx=1, pady=1)
-
-                        cell.bind('<KeyRelease>', lambda event: self.set_state(GUIState.EDITED))
-
-                        #Validate that value in cell is 1-9
-                        validate_cmd = (self.root.register(self.validate_input), '%P')
-                        cell.config(validate='key', validatecommand=validate_cmd)
-                        
-                        actual_row = box_row * 3 + cell_row
-                        actual_col = box_col * 3 + cell_col
-                        self.cells[actual_row][actual_col] = cell
-        self.root.update()
-    
-    def validate_input(self, value):
-        if value == "":
-            return True
-        if len(value) == 1 and value in "123456789":
-            return True
-        return False
-    
-    def create_buttons(self):
-        button_frame = tk.Frame(self.root)
-        button_frame.pack(pady=10)
-        button_frame.config(bg='lightblue')
-
-        solve_btn = tk.Button(
-            button_frame,
-            text="Solve",
-            command=self.solve,
-            font=('Arial', 12),
-            width=15,
-            bg="#4CAF50",
-            fg="white"
+        cell = self.cells[row][col]
+        cell.setStyleSheet(
+            """
+            QLineEdit {
+                background-color: transparent;
+                border: none;
+                color: black;
+            }
+            """
         )
-        solve_btn.grid(row=0, column=0, padx=5)
-        self.buttons['solve'] = solve_btn
 
-        clear_btn = tk.Button(
-            button_frame,
-            text="Clear",
-            command=self.clear_board,
-            font=('Arial', 12),
-            width=15,
-            bg="#f44336",
-            fg="white"
+        if new_value == '':
+            new_value = 0
+        else:
+            new_value = int(new_value)
+        self.sudoku_board.board[row][col].value = new_value
+
+    def update_cell_value(self, row, col, new_value):
+        cell = self.cells[row][col]
+        if new_value == 0:
+            new_value = ''
+        cell.setText(f"{new_value}")
+        cell.setStyleSheet(
+            """
+            QLineEdit {
+                background-color: transparent;
+                border: none;
+                color: blue;
+            }
+            """
         )
-        clear_btn.grid(row=0, column=1, padx=5)
-        self.buttons['clear'] = clear_btn
+        self.refresh()
 
-        load_sudoku_btn = tk.Button(
-            button_frame,
-            text="Load Sudoku",
-            command=self.load_sudoku,
-            font=('Arial', 12),
-            width=30,
-            bg="#2196F3",
-            fg="white"
-        )
-        load_sudoku_btn.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
-        self.buttons['load_sudoku'] = load_sudoku_btn
-
-        right_arrow_btn = tk.Button(
-            button_frame,
-            text="→",
-            command=self.increment_predefined_index,
-            font=('Arial', 12),
-            width=3,
-            bg="#2196F3",
-            fg="white"
-        )
-        right_arrow_btn.grid(row=2, column=1, padx=5, pady=5, sticky='w')
-        right_arrow_btn.grid_remove()
-        self.buttons['right_arrow'] = right_arrow_btn
-
-        left_arrow_btn = tk.Button(
-            button_frame,
-            text="←",
-            command=self.decrement_predefined_index,
-            font=('Arial', 12),
-            width=3,
-            bg="#2196F3",
-            fg="white"
-        )
-        left_arrow_btn.grid(row=2, column=0, padx=5, pady=5, sticky='e')
-        left_arrow_btn.grid_remove()
-        self.buttons['left_arrow'] = left_arrow_btn
-
-        add_constraints_btn = tk.Button(
-            button_frame,
-            text="Add Constraints",
-            command=lambda: self.set_state(GUIState.ADDING_CONSTRAINTS),
-            font=('Arial', 12),
-            width=15,
-            bg="#FF9800",
-            fg="white"
-        )
-        add_constraints_btn.grid(row=3, column=0, padx=5)
-        self.buttons['add_constraints'] = add_constraints_btn
-
-        white_kropki_dot_btn = tk.Button(
-            button_frame,
-            text="White Kropki Dot",
-            command=lambda: self.select_constraint(ConstraintsEnum.WHITE_KROPKI_DOT),
-            font=('Arial', 12),
-            width=15,
-            bg="#FFFFFF",
-            fg="black"
-        )
-        white_kropki_dot_btn.grid(row=0, column=0, padx=5, pady=5)
-        white_kropki_dot_btn.grid_remove()
-        self.buttons['white_kropki_dot'] = white_kropki_dot_btn
-
-        black_kropki_dot_btn = tk.Button(
-            button_frame,
-            text="Black Kropki Dot",
-            command=lambda: self.select_constraint(ConstraintsEnum.BLACK_KROPKI_DOT),
-            font=('Arial', 12),
-            width=15,
-            bg="#FFFFFF",
-            fg="black"
-        )
-        black_kropki_dot_btn.grid(row=0, column=1, padx=5, pady=5)
-        black_kropki_dot_btn.grid_remove()
-        self.buttons['black_kropki_dot'] = black_kropki_dot_btn
-
-        killer_cage_btn = tk.Button(
-            button_frame,
-            text="Killer Cage",
-            command=lambda: self.select_constraint(ConstraintsEnum.KILLER_CAGE),
-            font=('Arial', 12),
-            width=30,
-            bg="#FFFFFF",
-            fg="black"
-        )
-        killer_cage_btn.grid(row=1, column=0, columnspan=2, padx=5, pady=5)
-        killer_cage_btn.grid_remove()
-        self.buttons['killer_cage'] = killer_cage_btn
-
-        add_btn = tk.Button(
-            button_frame,
-            text="Add",
-            command=self.add_constraint,
-            font=('Arial', 12),
-            width=15,
-            bg="green",
-            fg="white"
-        )
-        add_btn.grid(row=0, column=0, columnspan=2, pady=5, padx=5)
-        add_btn.grid_remove()
-        self.buttons['add'] = add_btn
-
-        cancel_btn = tk.Button(
-            button_frame,
-            text="Cancel",
-            command=self.cancel_adding_costraint,
-            font=('Arial', 12),
-            width=15,
-            bg="red",
-            fg="white"
-        )
-        cancel_btn.grid(row=1, column=0, columnspan=2, padx=5)
-        cancel_btn.grid_remove()
-        self.buttons['cancel'] = cancel_btn
-
-        done_adding_constraints_btn = tk.Button(
-            button_frame,
-            text="Done",
-            command=lambda: self.set_state(GUIState.EDITED),
-            font=('Arial', 12),
-            width=30,
-            bg="#9C27B0",
-            fg="white"
-        )
-        done_adding_constraints_btn.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
-        done_adding_constraints_btn.grid_remove()
-        self.buttons['done_adding_constraints'] = done_adding_constraints_btn
-
-        save_btn = tk.Button(
-            button_frame,
-            text="Save",
-            command=self.save_board,
-            font=('Arial', 12),
-            width=15,
-            bg="#9C27B0",
-            fg="white"
-        )
-        save_btn.grid(row=3, column=1, padx=5)
-        save_btn.config(state=tk.DISABLED, disabledforeground='black')
-        self.buttons['save'] = save_btn
-
-        button_frame.grid_columnconfigure(0, weight=1, uniform="col")
-        button_frame.grid_columnconfigure(1, weight=1, uniform="col")
-
-    def get_board_values(self):
-        board = [[0 for _ in range(9)] for _ in range(9)]
+    def enable_cell_selection(self):
+        self.edit_mode = False
         for row in range(9):
             for col in range(9):
-                value = self.cells[row][col].get()
-                if value:
-                    board[row][col] = int(value)
+                self.cells[row][col].setReadOnly(True)
+        self.clear_cell_selections()
 
-        return board
-    
-    def update_cell(self, row, col, value):
-        cell =self.cells[row][col]
-        if value != 0:
-            cell.delete(0, tk.END)
-            cell.insert(0, str(value))
-            cell.config(fg='blue')
-        self.root.update()
+    def disable_cell_selection(self):
+        self.edit_mode = True
+        for row in range(9):
+            for col in range(9):
+                self.cells[row][col].setReadOnly(False)
+        self.clear_cell_selections()
 
-    def clear_board(self):
+    def on_cell_click(self, event, row, col):
+        if not self.edit_mode:
+            cell = self.cells[row][col]
+
+            if (row, col) in self.constraint_selected_cells:
+                self.constraint_selected_cells.remove((row, col))
+                cell.setStyleSheet(
+                    """
+                    QLineEdit {
+                        background-color: transparent;
+                        border: none;
+                    }"""
+                )
+            else:
+                self.constraint_selected_cells.append((row, col))
+                cell.setStyleSheet(
+                    """
+                    QLineEdit {
+                        background-color: #a4d4e3;
+                        border: none;
+                    }
+                    """
+                )
+            
+    def clear_cell_selections(self):
+        for row, col in self.constraint_selected_cells:
+            self.cells[row][col].setStyleSheet(
+                """
+                QLineEdit{
+                    background-color: transparent;
+                    border: none;
+                }
+                """
+            )
+        self.constraint_selected_cells = []
+    #endregion
+
+    def create_buttons(self):
+
+        #region Solve Button
+        solve_btn = QPushButton("Solve")
+        solve_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #009900;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #007700;
+            }
+            QPushButton:pressed {
+                background-color: #005500;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        solve_btn.clicked.connect(self.solve_btn_clicked)
+        self.button_row_1.addWidget(solve_btn)
+        self.buttons[GUIButtons.SOLVE.value] = solve_btn
+        #endregion
+
+        #region Clear Button
+        clear_btn = QPushButton("Clear")
+        clear_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #bb0000;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #990000;
+            }
+            QPushButton:pressed {
+                background-color: #770000;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        clear_btn.clicked.connect(self.clear_btn_clicked)
+        self.button_row_1.addWidget(clear_btn)
+        self.buttons[GUIButtons.CLEAR.value] = clear_btn
+        #endregion
+
+        #region Load Sudoku Button
+        load_sudoku_btn = QPushButton("Load Sudoku")
+        load_sudoku_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #56aecb;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #3ca2c3;
+            }
+            QPushButton:pressed {
+                background-color: #348ca9;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        load_sudoku_btn.clicked.connect(self.load_sudoku_btn_clicked)
+        self.button_row_2.addWidget(load_sudoku_btn)
+        self.buttons[GUIButtons.LOAD_SUDOKU.value] = load_sudoku_btn
+        #endregion
+
+        #region Arrow Buttons
+        left_arrow_btn = QPushButton("←")
+        left_arrow_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #56aecb;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #3ca2c3;
+            }
+            QPushButton:pressed {
+                background-color: #348ca9;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        ) 
+        left_arrow_btn.clicked.connect(self.left_arrow_btn_clicked)
+        self.button_row_2.addWidget(left_arrow_btn)
+        self.buttons[GUIButtons.LEFT_ARROW.value] = left_arrow_btn
+        left_arrow_btn.hide()
+
+        right_arrow_btn = QPushButton("→")
+        right_arrow_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #56aecb;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #3ca2c3;
+            }
+            QPushButton:pressed {
+                background-color: #348ca9;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        ) 
+        right_arrow_btn.clicked.connect(self.right_arrow_btn_clicked)
+        self.button_row_2.addWidget(right_arrow_btn)
+        self.buttons[GUIButtons.RIGHT_ARROW.value] = right_arrow_btn
+        right_arrow_btn.hide()
+        #endregion
+
+        #region Add Constraints Buttons
+        add_constraints_btn = QPushButton("Add Constraints")
+        add_constraints_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #dd8f00;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #bb7900;
+            }
+            QPushButton:pressed {
+                background-color: #bb7900;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        add_constraints_btn.clicked.connect(self.add_constraints_btn_clicked)
+        self.button_row_3.addWidget(add_constraints_btn)
+        self.buttons[GUIButtons.ADD_CONSTRAINTS.value] = add_constraints_btn
+
+        white_kropki_dot_btn = QPushButton("White Kropki Dot")
+        white_kropki_dot_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #e6e6e6;
+                color: black;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #d4d4d4;
+            }
+            QPushButton:pressed {
+                background-color: #c3c3c3;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        white_kropki_dot_btn.clicked.connect(self.white_kropki_dot_btn_clicked)
+        self.button_row_1.addWidget(white_kropki_dot_btn)
+        self.buttons[GUIButtons.WHITE_KROPKI_DOT.value] = white_kropki_dot_btn
+        white_kropki_dot_btn.hide()
+
+        black_kropki_dot_btn = QPushButton("Black Kropki Dot")
+        black_kropki_dot_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #e6e6e6;
+                color: black;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #d4d4d4;
+            }
+            QPushButton:pressed {
+                background-color: #c3c3c3;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        black_kropki_dot_btn.clicked.connect(self.black_kropki_dot_btn_clicked)
+        self.button_row_1.addWidget(black_kropki_dot_btn)
+        self.buttons[GUIButtons.BLACK_KROPKI_DOT.value] = black_kropki_dot_btn
+        black_kropki_dot_btn.hide()
+
+        killer_cage_btn = QPushButton("Killer Cage")
+        killer_cage_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #e6e6e6;
+                color: black;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #d4d4d4;
+            }
+            QPushButton:pressed {
+                background-color: #c3c3c3;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        killer_cage_btn.clicked.connect(self.killer_cage_btn_clicked)
+        self.button_row_2.addWidget(killer_cage_btn)
+        self.buttons[GUIButtons.KILLER_CAGE.value] = killer_cage_btn
+        killer_cage_btn.hide()
+
+        done_adding_constraints_btn = QPushButton("Done")
+        done_adding_constraints_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #5d5d5d;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #4d4d4d;
+            }
+            QPushButton:pressed {
+                background-color: #3b3b3b;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        done_adding_constraints_btn.clicked.connect(self.done_adding_constraints_btn_clicked)
+        self.button_row_3.addWidget(done_adding_constraints_btn)
+        self.buttons[GUIButtons.DONE_ADDING_CONSTRAINTS.value] = done_adding_constraints_btn
+        done_adding_constraints_btn.hide()
+
+        add_selected_constraint_btn = QPushButton("Add")
+        add_selected_constraint_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #009900;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #007700;
+            }
+            QPushButton:pressed {
+                background-color: #005500;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        add_selected_constraint_btn.clicked.connect(self.add_selected_constraint_btn_clicked)
+        self.button_row_1.addWidget(add_selected_constraint_btn)
+        self.buttons[GUIButtons.ADD_SELECTED_CONSTRAINT.value] = add_selected_constraint_btn
+        add_selected_constraint_btn.hide()
+
+        cancel_selected_constraint_btn = QPushButton("Cancel")
+        cancel_selected_constraint_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #bb0000;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #990000;
+            }
+            QPushButton:pressed {
+                background-color: #770000;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        cancel_selected_constraint_btn.clicked.connect(self.cancel_selected_constraint_btn_clicked)
+        self.button_row_2.addWidget(cancel_selected_constraint_btn)
+        self.buttons[GUIButtons.CANCEL_SELECTED_CONSTRAINT.value] = cancel_selected_constraint_btn
+        cancel_selected_constraint_btn.hide()
+        #endregion
+
+        #region Save Button
+        save_btn = QPushButton("Save")
+        save_btn.setStyleSheet(
+            """
+            QPushButton{
+                background-color: #bb00bb;
+                color: white;
+                padding: 10px 20px;
+                font-size: 20px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                font-weight:bold;
+                background-color: #990099;
+            }
+            QPushButton:pressed {
+                background-color: #770077;
+            }
+            QPushButton:disabled {
+                background-color: #4d4d4d;
+            }
+            """
+        )
+        save_btn.clicked.connect(self.save_btn_clicked)
+        save_btn.setDisabled(True)
+        self.button_row_3.addWidget(save_btn)
+        self.buttons[GUIButtons.SAVE.value] = save_btn
+        #endregion
+
+    #region Button Click Methods
+    def solve_btn_clicked(self):
+        solved_board = solver.solve(sudoku_board=self.sudoku_board, state_update_callback=self.set_state, cell_update_callback=self.update_cell_value)
+
+        if solved_board:
+            self.show_toast_notification("Solved!")
+        else:
+            self.show_toast_notification("Failed Solve :(")
+
+    def clear_btn_clicked(self):
         self.set_state(GUIState.EMPTY_BOARD)
         for row in range(9):
             for col in range(9):
-                self.cells[row][col].delete(0, tk.END)
-                self.cells[row][col].config(fg='black')
+                x = self.cells[row][col]
+                x.setText("")
         self.sudoku_board = SudokuBoard()
 
-    def load_sudoku(self):
-        predfined_sudoku = self.predefined_sudokus[self.current_predefined_index]
-        self.clear_board()
-
+    def load_sudoku_btn_clicked(self):
+        predefined_sudoku = self.predefined_sudokus[self.current_predefined_sudoku_index]
+        self.clear_btn_clicked()
+        
         self.set_state(GUIState.LOADING_SUDOKU)
 
-        self.sudoku_board = copy.deepcopy(predfined_sudoku)
+        self.sudoku_board = copy.deepcopy(predefined_sudoku)
         for row in range(9):
             for col in range(9):
-                value = predfined_sudoku.board[row][col].value
+                value = predefined_sudoku.board[row][col].value
                 if value != 0:
                     cell = self.cells[row][col]
-                    cell.delete(0, tk.END)
-                    cell.insert(0, str(value))
-                    cell.config(fg='black')
+                    cell.setText(f"{value}")
 
-    def increment_predefined_index(self):
-        self.current_predefined_index += 1
-        if self.current_predefined_index >= len(self.predefined_sudokus):
-            self.current_predefined_index = 0
+    def left_arrow_btn_clicked(self):
+        self.current_predefined_sudoku_index -= 1
+        if self.current_predefined_sudoku_index < 0:
+            self.current_predefined_sudoku_index = len(self.predefined_sudokus) - 1
 
-        self.load_sudoku()
+        self.load_sudoku_btn_clicked
 
-    def decrement_predefined_index(self):
-        self.current_predefined_index -= 1
-        if self.current_predefined_index < 0:
-            self.current_predefined_index = len(self.predefined_sudokus) - 1
+    def right_arrow_btn_clicked(self):
+        self.current_predefined_sudoku_index += 1
+        if self.current_predefined_sudoku_index >= len(self.predefined_sudokus):
+            self.current_predefined_sudoku_index = 0
 
-        self.load_sudoku()
+        self.load_sudoku_btn_clicked()
 
-    def select_constraint(self, constraint_type):
+    def add_constraints_btn_clicked(self):
+        self.set_state(GUIState.ADDING_CONSTRAINTS)
+        
+    def save_btn_clicked(self):
+        board_values = [[0 for _ in range(9)] for _ in range(9)]
+        for row in range(9):
+            for col in range(9):
+                board_values[row][col] = self.sudoku_board.board[row][col].value
+
+        constraints = defaultdict(list)
+        for constraint in self.sudoku_board.constraints:
+            match constraint:
+                case KropkiDotConstraint():
+                    cell1 = constraint.affected_cells[0]
+                    cell2 = constraint.affected_cells[1]
+                    cells = [(cell1.row, cell1.col), (cell2.row, cell2.col)]
+
+                    constraints[constraint.type.value].append(cells)
+                case KillerCageConstraint():
+                    print("IMPLEMENT FUNCTIONALITY TO SAVE KILLER CAGE CONSTRAINTS")
+                case _:
+                    continue
+
+        if predefined_sudoku_utils.save_predefined_sudoku(board_values, constraints):
+            self.show_toast_notification("Sudoku saved successfully!")
+            self.predefined_sudokus.append(self.sudoku_board)
+        else:
+            self.show_toast_notification("There was an error when saving the sudoku.")
+
+    def white_kropki_dot_btn_clicked(self):
         self.enable_cell_selection()
-        match constraint_type:
-            case ConstraintsEnum.WHITE_KROPKI_DOT:
-                self.set_state(GUIState.ADDING_WHITE_KROPKI_DOT)
-                self.selected_constraint_type = ConstraintsEnum.WHITE_KROPKI_DOT
-            case ConstraintsEnum.BLACK_KROPKI_DOT:
-                self.set_state(GUIState.ADDING_BLACK_KROPKI_DOT)
-                self.selected_constraint_type = ConstraintsEnum.BLACK_KROPKI_DOT
-            case ConstraintsEnum.KILLER_CAGE:
-                self.set_state(GUIState.ADDING_KILLER_CAGE)
-                self.selected_constraint_type = ConstraintsEnum.KILLER_CAGE
+        self.set_state(GUIState.ADDING_WHITE_KROPKI_DOT)
+        self.selected_constraint_type = ConstraintsEnum.WHITE_KROPKI_DOT        
+        
+    def black_kropki_dot_btn_clicked(self):
+        self.enable_cell_selection()
+        self.set_state(GUIState.ADDING_BLACK_KROPKI_DOT)
+        self.selected_constraint_type = ConstraintsEnum.BLACK_KROPKI_DOT
 
-    def add_constraint(self):
+    def killer_cage_btn_clicked(self):
+        self.enable_cell_selection()
+        self.set_state(GUIState.ADDING_KILLER_CAGE)
+        self.selected_constraint_type = ConstraintsEnum.KILLER_CAGE
+
+    def add_selected_constraint_btn_clicked(self):
         def is_valid_kropki_selection(cells):
             if len(cells) != 2:
                 return False
@@ -484,19 +833,14 @@ class SudokuGUI:
                     )
                     self.sudoku_board.constraints.append(new_constraint)
 
-                    self.draw_kropki_dot(
-                        cell1=self.constraint_selected_cells[0],
-                        cell2=self.constraint_selected_cells[1],
-                        dot_type='white'
-                    )
+                    self.draw_white_kropki(self.constraint_selected_cells[0][0], self.constraint_selected_cells[0][1], self.constraint_selected_cells[1][0], self.constraint_selected_cells[1][1])
 
-                    self.root.update()
-
-                    #add constraint to the cells
                     for cell in affected_cells:
                         cell.constraints.append(new_constraint)
+
+                    self.show_toast_notification("White Kropki Dot Constraint Added")
                 else:
-                    self.root.update()
+                    self.show_toast_notification("Invalid Cell Selection For Kropki Dot")
                     return
             case ConstraintsEnum.BLACK_KROPKI_DOT:
                 if is_valid_kropki_selection(self.constraint_selected_cells):
@@ -507,141 +851,104 @@ class SudokuGUI:
                         type=KropkiTypeEnum.BLACK_DOT
                     )
                     self.sudoku_board.constraints.append(new_constraint)
-                    self.root.update()
 
-                    #Add constraint to the cells
+                    self.draw_black_kropki(self.constraint_selected_cells[0][0], self.constraint_selected_cells[0][1], self.constraint_selected_cells[1][0], self.constraint_selected_cells[1][1])
+
                     for cell in affected_cells:
                         cell.constraints.append(new_constraint)
+
+                    self.show_toast_notification("Black Kropki Dot Constraint Added")
                 else:
-                    self.root.update()
+                    self.show_toast_notification("Invalid Cell Selection For Kropki Dot")
                     return
             case ConstraintsEnum.KILLER_CAGE:
-                pass 
+                print("TO-DO: Implement Killer Cage")
+            
+        self.cancel_selected_constraint_btn_clicked()
 
-        self.cancel_adding_costraint()
-
-    def cancel_adding_costraint(self):
-        self.constraint_selected_cells = []
+    def cancel_selected_constraint_btn_clicked(self):
         self.disable_cell_selection()
+        self.constraint_selected_cells = []
         self.set_state(GUIState.ADDING_CONSTRAINTS)
 
-    def enable_cell_selection(self):
-        #Enable cells to be selected, but not edited
-        for row in range(9):
-            for col in range(9):
-                cell = self.cells[row][col]
-                cell.config(state=tk.DISABLED, disabledbackground='white', disabledforeground='black', cursor='hand2')
-                cell.bind('<Button-1>', lambda event, r=row, c=col: self.on_cell_click(r, c))
+    def done_adding_constraints_btn_clicked(self):
+        self.set_state(GUIState.EDITED)
 
-    def disable_cell_selection(self):
-        #Disable cell selection and re-enable editing
-        for row in range(9):
-            for col in range(9):
-                cell = self.cells[row][col]
-                cell.config(state=tk.NORMAL, cursor='xterm')
-                cell.unbind('<Button-1>')
+    #endregion Button Click Methods
 
-    def on_cell_click(self, row, col):
-        if (row, col) in self.constraint_selected_cells:
-            self.constraint_selected_cells.remove((row, col))
-            self.cells[row][col].config(disabledbackground='white')
-        else:
-            self.constraint_selected_cells.append((row, col))
-            self.cells[row][col].config(disabledbackground='lightblue')
-        self.root.update()
+    #region Draw Constraints
+    def _get_border_position(self, row1, col1, row2, col2):
+        #Get the center position between two cells
+        if row1 == row2:  # Horizontal
+            x = (min(col1, col2) + 1) * self.cell_size
+            y = (row1 + 0.5) * self.cell_size
+        else:  # Vertical
+            x = (col1 + 0.5) * self.cell_size
+            y = (min(row1, row2) + 1) * self.cell_size
+        return x, y
 
-    def convert_constraints_to_json(self):
-        constraints_json = defaultdict(list)
+    def draw_white_kropki(self, row1, col1, row2, col2):
+        x, y = self._get_border_position(row1, col1, row2, col2)
 
-        for constraint in self.sudoku_board.constraints:
-            match constraint:
-                case KropkiDotConstraint():
-                    cell1 = constraint.affected_cells[0]
-                    cell2 = constraint.affected_cells[1]
-                    cells = [(cell1.row, cell1.col), (cell2.row, cell2.col)]
+        # Create white circle with black outline
+        ellipse = QGraphicsEllipseItem(x - 8, y - 8, 16, 16)
+        ellipse.setBrush(QBrush(Qt.white))
+        ellipse.setPen(QPen(Qt.black, 2))
+        ellipse.setZValue(10)  # Above grid lines
+        self.scene.addItem(ellipse)
 
-                    constraints_json[constraint.type.value].append(cells)
-                case KillerCageConstraint():
-                    print("IMPLEMENT FUNCTIONALITY TO SAVE KILLER CAGE CONSTRAINTS")
-                case _:
-                    continue
-        return constraints_json
+    def draw_black_kropki(self, row1, col1, row2, col2):
+        x, y = self._get_border_position(row1, col1, row2, col2)
 
-    def save_board(self):
-        board_values = self.get_board_values()
-        board_constraints = self.convert_constraints_to_json()
-        sudoku_to_save = {
-            'board': board_values,
-            'constraints': board_constraints
-        }
+        # Create white circle with black outline
+        ellipse = QGraphicsEllipseItem(x - 8, y - 8, 16, 16)
+        ellipse.setBrush(QBrush(Qt.black))
+        ellipse.setPen(QPen(Qt.black, 2))
+        ellipse.setZValue(10)  # Above grid lines
+        self.scene.addItem(ellipse)
 
-        try:
-            with open(PREDEFINED_SUDOKUS_FILE, 'r') as data:
-                sudoku_data = json.load(data)
-            
-            sudoku_data['predefined_sudokus'].append(sudoku_to_save)
+    def draw_killer_cage(self, cells, total):
+        print("TO-DO: implement killer cage drawing")
+        #Something like this
+        
+        # if not cells:
+        #     return
+        
+        # # Find bounding box
+        # rows = [r for r, c in cells]
+        # cols = [c for r, c in cells]
+        # min_row, max_row = min(rows), max(rows)
+        # min_col, max_col = min(cols), max(cols)
+        
+        # x1 = min_col * self.cell_size + 3
+        # y1 = min_row * self.cell_size + 3
+        # x2 = (max_col + 1) * self.cell_size - 3
+        # y2 = (max_row + 1) * self.cell_size - 3
+        
+        # # Create dashed path around the cage
+        # path = QPainterPath()
+        # path.moveTo(x1, y1)
+        # path.lineTo(x2, y1)
+        # path.lineTo(x2, y2)
+        # path.lineTo(x1, y2)
+        # path.lineTo(x1, y1)
+        
+        # # Add path with dashed pen
+        # pen = QPen(Qt.black, 2, Qt.DashLine)
+        # path_item = self.scene.addPath(path, pen)
+        # path_item.setZValue(5)
+        
+        # # Add sum text in top-left corner
+        # text = QGraphicsTextItem(str(total))
+        # text.setFont(QFont('Arial', 10, QFont.Bold))
+        # text.setPos(x1 + 2, y1 - 2)
+        # text.setZValue(15)
+        # self.scene.addItem(text)
+    
+    #endregion
 
-            with open(PREDEFINED_SUDOKUS_FILE, 'w') as data:
-                json.dump(sudoku_data, data, indent=4)
-
-            messagebox.showinfo("Save Successful", "Sudoku saved successfully!")
-
-            sudoku_board = SudokuBoard()
-            for row in range(9):
-                for col in range(9):
-                    value = sudoku_to_save['board'][row][col]
-                    if value != 0:
-                        sudoku_board.board[row][col].set_value(value)
-            self.predefined_sudokus.append(sudoku_board)
-        except Exception as e:
-            messagebox.showerror("Save Failed", f"An error occurred while saving the Sudoku: {e}")
-
-    def solve(self):
-        self.set_state(GUIState.SOLVING)
-
-        self.root.update()
-
-        #Set values in SudokuBoard
-        board = self.get_board_values()
-        for row in range(9):
-            for col in range(9):
-                value = board[row][col]
-                if value != 0:
-                    self.sudoku_board.board[row][col].set_value(value)
-
-        sudoku_board_copy = copy.deepcopy(self.sudoku_board)
-        final_board = self.recursive_solve(sudoku_board_copy)
-        if final_board:
-            self.set_state(GUIState.SOLVED)
-        else:
-            self.set_state(GUIState.INCORRECT_SOLVE)
-        self.root.update()
-
-    def recursive_solve(self, sudoku_board):
-        if sudoku_board.is_solved():
-            return sudoku_board
-
-        least_cell = sudoku_board.find_least_num_possible_cell()
-        possible_values = least_cell.possible_values.copy()
-
-        #If it has 0 possible values -> backtrack
-        if len(possible_values) == 0:
-            return None
-
-        #Try each possible value
-        for value in possible_values:
-
-            sudoku_board_copy = copy.deepcopy(sudoku_board)
-            least_cell = sudoku_board_copy.board[least_cell.row][least_cell.col]
-
-            least_cell.set_value(value)
-            self.update_cell(least_cell.row, least_cell.col, value)
-            # print(f"Trying {value} in cell at row {least_cell.row + 1} and col {least_cell.col + 1}")
-
-            if self.recursive_solve(sudoku_board_copy):
-                return sudoku_board_copy
-            
-            #Backtrack
-            # print(f"{value} does not work in cell at row {least_cell.row + 1} and col {least_cell.col + 1}")
-            least_cell.set_value(0)
-            self.update_cell(least_cell.row, least_cell.col, 0)
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = SudokuGUI()
+    window.show()
+    sys.exit(app.exec_())

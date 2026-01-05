@@ -1,9 +1,14 @@
+import sys
+
+from PyQt5.QtWidgets import QApplication
+
 from Constraints import *
+from GUI import SudokuGUI
 from SudokuBoard import SudokuBoard
 from SudokuCell import SudokuCell
-from GUI import SudokuGUI
-import tkinter as tk
 
-root = tk.Tk()
-app = SudokuGUI(root)
-root.mainloop()
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = SudokuGUI()
+    window.show()
+    sys.exit(app.exec_())
