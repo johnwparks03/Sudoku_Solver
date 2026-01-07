@@ -1,68 +1,57 @@
 # Sudoku Solver
 
-## Workflow
+A Python-based Sudoku solver with GUI support for standard Sudoku puzzles and variant rules including Kropki dots and Killer cages.
 
-1. Constraint propagation to eliminate impossible value using rules such as 1-9 in each row/column, kropki dots, killer cage, etc.
-2. Choose square with least amount of possible numbers
-3. Choose a number for the square
-    1. Propagate constraints for affected squares
-    2. Recursively solve
-    3. Backtrack when
-        - A contradiction against one of the rules is found
-        - A square has no more possible values
+## Features
 
-### Important Notes
+- **Interactive GUI**: Built with PyQt for easy puzzle input and visualization
+- **Multiple Solving Techniques**:
+  - Constraint propagation
+  - Backtracking algorithm
+  - Naked singles, hidden singles
+- **Variant Rule Support**:
+  - Kropki dots (white: consecutive, black: 2:1 ratio)
+  - Killer cages (sum constraints)
+  - Extensible architecture for adding new constraint types
+- **Visual Constraint Editor**: Click to add and remove constraints
+- **Predefined Puzzles**: Load sample puzzles from JSON configuration files
+- **Step-by-step Visualization**: Watch the solver work through the puzzle
 
-- Make rulesets modular so new rulesets can be added
+## Installation
 
-### Things to add
+### Prerequisites
+- Python 3.8+
 
-- Visual Interface
-- Sudoku Creator/Generator
-
-## Notes
-
-Board: 9x9 array of SudokuCell objects
-
-SudokuCell:
-
-- row, col
-- value
-- possibilities (set of possible values)
-- constraints (list of Constraint objects)
-
-Constraint (base class):
-
-- affected_cells (list of SudokuCell objects)
-- verify() method (abstract/to be implemented)
-
-Specific constraint classes extend Constraint:
-
-- RowConstraint
-- ColumnConstraint
-- BoxConstraint
-- KillerCageConstraint (with sum requirement)
-- KropkiConstraint (with dot type: white/black)
-- etc.
-
-Sudoku Board Indexing
-
-```txt
-| 0,0 | 0,1 | 0,2 | 0,3 | 0,4 | 0,5 | 0,6 | 0,7 | 0,8 |  
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|  
-| 1,0 | 1,1 | 1,2 | 1,3 | 1,4 | 1,5 | 1,6 | 1,7 | 1,8 |  
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|  
-| 2,0 | 2,1 | 2,2 | 2,3 | 2,4 | 2,5 | 2,6 | 2,7 | 2,8 |  
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|  
-| 3,0 | 3,1 | 3,2 | 3,3 | 3,4 | 3,5 | 3,6 | 3,7 | 3,8 |  
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|  
-| 4,0 | 4,1 | 4,2 | 4,3 | 4,4 | 4,5 | 4,6 | 4,7 | 4,8 |  
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|  
-| 5,0 | 5,1 | 5,2 | 5,3 | 5,4 | 5,5 | 5,6 | 5,7 | 5,8 |  
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|  
-| 6,0 | 6,1 | 6,2 | 6,3 | 6,4 | 6,5 | 6,6 | 6,7 | 6,8 |  
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|  
-| 7,0 | 7,1 | 7,2 | 7,3 | 7,4 | 7,5 | 7,6 | 7,7 | 7,8 |  
-|-----|-----|-----|-----|-----|-----|-----|-----|-----|  
-| 8,0 | 8,1 | 8,2 | 8,3 | 8,4 | 8,5 | 8,6 | 8,7 | 8,8 |  
+### Setup
+```bash
+git clone https://github.com/yourusername/Sudoku_Solver.git
+cd Sudoku_Solver
+pip install -r requirements.txt
 ```
+
+## Usage
+
+### Running the Application
+```bash
+python main.py
+```
+
+## Algorithm
+
+The solver uses a combination of techniques:
+
+1. **Constraint Propagation**: Eliminates impossible values based on rules
+   - Row/column/box uniqueness
+   - Kropki relationships (consecutive or 2:1 ratio)
+   - Other constraints
+
+2. **Backtracking**: When propagation isn't sufficient
+   - Selects cell with minimum possible values
+   - Tries each possibility recursively
+   - Backtracks on contradictions
+
+## Future Enhancements
+
+- [ ] Additional constraint types 
+- [ ] Performance optimizations
+- [ ] Web-based version
