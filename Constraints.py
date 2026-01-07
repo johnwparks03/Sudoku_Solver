@@ -2,10 +2,14 @@ from abc import ABC, abstractmethod
 from itertools import combinations
 from enums import ConstraintsEnum, KropkiTypeEnum
 
-
 class Constraint(ABC):
+
+    _id_counter = 0
+
     def __init__(self, cells):
         self.affected_cells = cells # List of cells affected by the constraint
+        self.constraint_id = Constraint._id_counter
+        Constraint._id_counter += 1
 
     @abstractmethod
     def verify_constraint(self):
