@@ -3,7 +3,7 @@ import sys
 from collections import defaultdict
 
 from PyQt5.QtCore import QRectF, Qt, QTimer
-from PyQt5.QtGui import QBrush, QColor, QFont, QIntValidator, QPen
+from PyQt5.QtGui import QBrush, QColor, QFont, QIntValidator, QPen, QLinearGradient
 from PyQt5.QtWidgets import (
     QApplication,
     QGraphicsEllipseItem,
@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QPushButton,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -55,6 +56,7 @@ class SudokuGUI(QMainWindow):
         self.constraint_selected_cells = []
         self.selected_constraint_type = None
         self.edit_mode = True #True when user can edit cells, False when user can select cells
+        self.constraint_drawings = {}
 
         self.setWindowTitle("Sudoku Solver")
         self.cell_size = 60
@@ -78,7 +80,7 @@ class SudokuGUI(QMainWindow):
         self.draw_grid()
         self.create_cells()
 
-        self.view.setFixedSize(total_size + 20, total_size + 20)
+        self.view.setFixedSize(total_size + 3, total_size + 3)
         self.adjustSize()
 
         main_layout.addWidget(self.view)
@@ -128,8 +130,6 @@ class SudokuGUI(QMainWindow):
         QTimer.singleShot(duration, self.toast.hide)
 
     def set_state(self, new_state):
-        print(new_state)
-
         prev_state = self.state
         self.state = new_state
 
@@ -234,9 +234,21 @@ class SudokuGUI(QMainWindow):
                 x = col * self.cell_size
                 y = row * self.cell_size
 
+                left_offset = 2 if col % 3 == 0 else 1
+                top_offset = 2 if row % 3 == 0 else 1
+                right_offset = 2 if (col + 1) % 3 == 0 else 1
+                bottom_offset = 2 if (row + 1) % 3 == 0 else 1
+
                 #Add cell to the scene
+
                 proxy = self.scene.addWidget(cell)
-                proxy.setGeometry(QRectF(x, y, self.cell_size, self.cell_size))
+                proxy.setMinimumSize(0, 0)
+                proxy.setGeometry(QRectF(
+                    x + left_offset, 
+                    y + top_offset, 
+                    self.cell_size - left_offset - right_offset, 
+                    self.cell_size - top_offset - bottom_offset
+                ))
 
                 cell.textEdited.connect(lambda text, r=row, c=col: self.cell_edited(r, c, text))
                 cell.mousePressEvent = lambda event, r=row, c=col: self.on_cell_click(event, r, c)
@@ -264,7 +276,7 @@ class SudokuGUI(QMainWindow):
             new_value = 0
         else:
             new_value = int(new_value)
-        self.sudoku_board.board[row][col].value = new_value
+        self.sudoku_board.board[row][col].set_value(new_value)
 
     def update_cell_value(self, row, col, new_value):
         cell = self.cells[row][col]
@@ -733,9 +745,24 @@ class SudokuGUI(QMainWindow):
         self.set_state(GUIState.EMPTY_BOARD)
         for row in range(9):
             for col in range(9):
-                x = self.cells[row][col]
-                x.setText("")
+                cell = self.cells[row][col]
+                cell.setText("")
+                cell.setStyleSheet(
+                    """
+
+                    QLineEdit {
+                        background-color: transparent;
+                        border: none;
+                        color: black;
+                    }
+                    """
+                )
         self.sudoku_board = SudokuBoard()
+
+        for item in self.constraint_drawings.values():
+            if item.scene() == self.scene:
+                self.scene.removeItem(item)
+        self.refresh()
 
     def load_sudoku_btn_clicked(self):
         predefined_sudoku = self.predefined_sudokus[self.current_predefined_sudoku_index]
@@ -751,12 +778,25 @@ class SudokuGUI(QMainWindow):
                     cell = self.cells[row][col]
                     cell.setText(f"{value}")
 
+        for constraint in self.sudoku_board.constraints:
+            if isinstance(constraint, (RowConstraint, ColumnConstraint, BoxConstraint)):
+                continue
+            elif isinstance(constraint, KropkiDotConstraint):
+                row1, col1 = constraint.affected_cells[0].row, constraint.affected_cells[0].col
+                row2, col2 = constraint.affected_cells[1].row, constraint.affected_cells[1].col
+                if constraint.type == KropkiTypeEnum.WHITE_DOT:
+                    self.draw_white_kropki(row1, col1, row2, col2)
+                else:
+                    self.draw_black_kropki(row1, col1, row2, col2)
+            elif isinstance(constraint, KillerCageConstraint):
+                pass
+
     def left_arrow_btn_clicked(self):
         self.current_predefined_sudoku_index -= 1
         if self.current_predefined_sudoku_index < 0:
             self.current_predefined_sudoku_index = len(self.predefined_sudokus) - 1
 
-        self.load_sudoku_btn_clicked
+        self.load_sudoku_btn_clicked()
 
     def right_arrow_btn_clicked(self):
         self.current_predefined_sudoku_index += 1
@@ -821,22 +861,37 @@ class SudokuGUI(QMainWindow):
                 return False
             
             return True
+        
 
         match self.selected_constraint_type:
             case ConstraintsEnum.WHITE_KROPKI_DOT:
                 if is_valid_kropki_selection(self.constraint_selected_cells):
                     #Add white kropki dot constraint to SudokuBoard
                     affected_cells = [self.sudoku_board.board[r][c] for r, c in self.constraint_selected_cells]
+                    affected_cell_ids = set([affected_cells[0].id, affected_cells[1].id])
+
+                    for c in affected_cells[0].constraints:
+                        if isinstance(c, KropkiDotConstraint):
+                            c_ids = set([c.affected_cells[0].id, c.affected_cells[1].id])
+                            if affected_cell_ids == c_ids:
+                                if c.type == KropkiTypeEnum.WHITE_DOT:
+                                    #Duplicate constraint
+                                    self.show_toast_notification("That Constraint Has Already Been Added")
+                                else:
+                                    self.show_toast_notification("You Already Have A Black Kropki Dot Constraint There")
+                                return
+
                     new_constraint = KropkiDotConstraint(
                         cells=affected_cells,
                         type=KropkiTypeEnum.WHITE_DOT
                     )
+
                     self.sudoku_board.constraints.append(new_constraint)
 
                     self.draw_white_kropki(self.constraint_selected_cells[0][0], self.constraint_selected_cells[0][1], self.constraint_selected_cells[1][0], self.constraint_selected_cells[1][1])
 
                     for cell in affected_cells:
-                        cell.constraints.append(new_constraint)
+                        cell.add_constraint(new_constraint)
 
                     self.show_toast_notification("White Kropki Dot Constraint Added")
                 else:
@@ -846,6 +901,19 @@ class SudokuGUI(QMainWindow):
                 if is_valid_kropki_selection(self.constraint_selected_cells):
                     #Add black kropki dot constraint to SudokuBoard
                     affected_cells = [self.sudoku_board.board[r][c] for r, c in self.constraint_selected_cells]
+                    affected_cell_ids = set([affected_cells[0].id, affected_cells[1].id])
+
+                    for c in affected_cells[0].constraints:
+                        if isinstance(c, KropkiDotConstraint):
+                            c_ids = set([c.affected_cells[0].id, c.affected_cells[1].id])
+                            if affected_cell_ids == c_ids:
+                                if c.type == KropkiTypeEnum.BLACK_DOT:
+                                    #Duplicate constraint
+                                    self.show_toast_notification("That Constraint Has Already Been Added")
+                                else:
+                                    self.show_toast_notification("You Already Have A White Kropki Dot Constraint There")
+                                return
+
                     new_constraint = KropkiDotConstraint(
                         cells=affected_cells,
                         type=KropkiTypeEnum.BLACK_DOT
@@ -855,7 +923,7 @@ class SudokuGUI(QMainWindow):
                     self.draw_black_kropki(self.constraint_selected_cells[0][0], self.constraint_selected_cells[0][1], self.constraint_selected_cells[1][0], self.constraint_selected_cells[1][1])
 
                     for cell in affected_cells:
-                        cell.constraints.append(new_constraint)
+                        cell.add_constraint(new_constraint)
 
                     self.show_toast_notification("Black Kropki Dot Constraint Added")
                 else:
@@ -872,7 +940,10 @@ class SudokuGUI(QMainWindow):
         self.set_state(GUIState.ADDING_CONSTRAINTS)
 
     def done_adding_constraints_btn_clicked(self):
-        self.set_state(GUIState.EDITED)
+        if self.sudoku_board.is_board_empty():
+            self.set_state(GUIState.EMPTY_BOARD)
+        else:
+            self.set_state(GUIState.EDITED)
 
     #endregion Button Click Methods
 
@@ -897,6 +968,9 @@ class SudokuGUI(QMainWindow):
         ellipse.setZValue(10)  # Above grid lines
         self.scene.addItem(ellipse)
 
+        self.constraint_drawings[(x, y)] = ellipse
+        self.refresh()
+
     def draw_black_kropki(self, row1, col1, row2, col2):
         x, y = self._get_border_position(row1, col1, row2, col2)
 
@@ -906,6 +980,11 @@ class SudokuGUI(QMainWindow):
         ellipse.setPen(QPen(Qt.black, 2))
         ellipse.setZValue(10)  # Above grid lines
         self.scene.addItem(ellipse)
+
+        self.constraint_drawings[(x, y)] = ellipse
+        self.refresh()
+        
+
 
     def draw_killer_cage(self, cells, total):
         print("TO-DO: implement killer cage drawing")
@@ -946,9 +1025,3 @@ class SudokuGUI(QMainWindow):
         # self.scene.addItem(text)
     
     #endregion
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    window = SudokuGUI()
-    window.show()
-    sys.exit(app.exec_())
