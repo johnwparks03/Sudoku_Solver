@@ -888,7 +888,13 @@ class SudokuGUI(QMainWindow):
 
                     self.sudoku_board.constraints.append(new_constraint)
 
-                    self.draw_white_kropki(self.constraint_selected_cells[0][0], self.constraint_selected_cells[0][1], self.constraint_selected_cells[1][0], self.constraint_selected_cells[1][1])
+                    self.draw_white_kropki(
+                        row1=self.constraint_selected_cells[0][0], 
+                        col1=self.constraint_selected_cells[0][1], 
+                        row2=self.constraint_selected_cells[1][0], 
+                        col2=self.constraint_selected_cells[1][1],
+                        constraint_id=new_constraint.constraint_id
+                    )
 
                     for cell in affected_cells:
                         cell.add_constraint(new_constraint)
@@ -920,7 +926,13 @@ class SudokuGUI(QMainWindow):
                     )
                     self.sudoku_board.constraints.append(new_constraint)
 
-                    self.draw_black_kropki(self.constraint_selected_cells[0][0], self.constraint_selected_cells[0][1], self.constraint_selected_cells[1][0], self.constraint_selected_cells[1][1])
+                    self.draw_black_kropki(
+                        row1=self.constraint_selected_cells[0][0], 
+                        col1=self.constraint_selected_cells[0][1], 
+                        row2=self.constraint_selected_cells[1][0], 
+                        col2=self.constraint_selected_cells[1][1],
+                        constraint_id=new_constraint.constraint_id
+                    )
 
                     for cell in affected_cells:
                         cell.add_constraint(new_constraint)
@@ -958,7 +970,7 @@ class SudokuGUI(QMainWindow):
             y = (min(row1, row2) + 1) * self.cell_size
         return x, y
 
-    def draw_white_kropki(self, row1, col1, row2, col2):
+    def draw_white_kropki(self, row1, col1, row2, col2, constraint_id):
         x, y = self._get_border_position(row1, col1, row2, col2)
 
         # Create white circle with black outline
@@ -966,12 +978,12 @@ class SudokuGUI(QMainWindow):
         ellipse.setBrush(QBrush(Qt.white))
         ellipse.setPen(QPen(Qt.black, 2))
         ellipse.setZValue(10)  # Above grid lines
-        self.scene.addItem(ellipse)
 
-        self.constraint_drawings[(x, y)] = ellipse
+        self.scene.addItem(ellipse)
+        self.constraint_drawings[constraint_id] = ellipse
         self.refresh()
 
-    def draw_black_kropki(self, row1, col1, row2, col2):
+    def draw_black_kropki(self, row1, col1, row2, col2, constraint_id):
         x, y = self._get_border_position(row1, col1, row2, col2)
 
         # Create white circle with black outline
@@ -979,9 +991,9 @@ class SudokuGUI(QMainWindow):
         ellipse.setBrush(QBrush(Qt.black))
         ellipse.setPen(QPen(Qt.black, 2))
         ellipse.setZValue(10)  # Above grid lines
-        self.scene.addItem(ellipse)
 
-        self.constraint_drawings[(x, y)] = ellipse
+        self.scene.addItem(ellipse)
+        self.constraint_drawings[constraint_id] = ellipse
         self.refresh()
         
 
