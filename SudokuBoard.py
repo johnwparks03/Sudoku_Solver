@@ -9,11 +9,24 @@ class SudokuBoard():
         self.constraints = []  # List of all constraints on the board
         self.board = self.create_empty_board()  # 2D list of SudokuCell objects
 
+    def is_board_empty(self):
+        if len(self.constraints) > 27: #27 is the number of row, column, and box constraints
+            return False
+        
+        for row in self.board:
+            for cell in row:
+                if cell.value != 0:
+                    return False
+        return True
+
     def find_least_num_possible_cell(self):
         empty_cells = [cell for row in self.board for cell in row if cell.value == 0]
-        min_cell = min(empty_cells, key=lambda c: len(c.possible_values), default=None)
 
-        return min_cell
+        #Sort empty cells by number of constrains
+        empty_cells.sort(key=lambda cell: (len(cell.possible_values), -len(cell.constraints)))
+
+        return empty_cells[0]
+
     
     def is_solved(self):
         #Check that each cell is filled
