@@ -37,8 +37,8 @@ def create_predefined_sudokus():
                             )
 
                             sudoku_board.constraints.append(new_constraint)
-                            cell1.constraints.append(new_constraint)
-                            cell2.constraints.append(new_constraint)
+                            cell1.add_constraint(new_constraint)
+                            cell2.add_constraint(new_constraint)
 
                     case ConstraintsEnum.BLACK_KROPKI_DOT.value:
                         for affected_cells in constraint:
@@ -54,8 +54,8 @@ def create_predefined_sudokus():
                             )
 
                             sudoku_board.constraints.append(new_constraint)
-                            cell1.constraints.append(new_constraint)
-                            cell2.constraints.append(new_constraint)
+                            cell1.add_constraint(new_constraint)
+                            cell2.add_constraint(new_constraint)
                     case ConstraintsEnum.KILLER_CAGE.value:
                         print("IMPLEMENT FUNCTIONALITY TO LOAD KILLER AGE CONSTRAINTS")
                     case _:
