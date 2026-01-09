@@ -1,12 +1,22 @@
 import copy
 import sys
+import weakref
 from collections import defaultdict
 
-from PyQt5.QtCore import QRectF, Qt, QTimer
-from PyQt5.QtGui import QBrush, QColor, QFont, QIntValidator, QPen, QLinearGradient
+from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
+from PyQt5.QtGui import (
+    QBrush,
+    QColor,
+    QCursor,
+    QFont,
+    QIntValidator,
+    QLinearGradient,
+    QPen,
+)
 from PyQt5.QtWidgets import (
     QApplication,
     QGraphicsEllipseItem,
+    QGraphicsProxyWidget,
     QGraphicsScene,
     QGraphicsView,
     QHBoxLayout,
@@ -15,6 +25,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QPushButton,
     QStyle,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +35,24 @@ import solver
 from Constraints import *
 from enums import *
 from SudokuBoard import SudokuBoard
+
+class HoverableEllipse(QGraphicsEllipseItem):
+    """Ellipse that can show delete button on hover"""
+    
+    def __init__(self, x, y, w, h, parent_gui):
+        super().__init__(x, y, w, h)
+        self.parent_gui = parent_gui
+        self.setAcceptHoverEvents(True)
+    
+    def hoverEnterEvent(self, event):
+        """Show delete button when mouse enters"""
+        self.parent_gui.show_delete_button(self)
+        super().hoverEnterEvent(event)
+    
+    def hoverLeaveEvent(self, event):
+        """Maybe hide delete button when mouse leaves"""
+        QTimer.singleShot(100, lambda: self.parent_gui.maybe_hide_delete_button(self))
+        super().hoverLeaveEvent(event)
 
 
 class SudokuGUI(QMainWindow):
@@ -57,6 +86,7 @@ class SudokuGUI(QMainWindow):
         self.selected_constraint_type = None
         self.edit_mode = True #True when user can edit cells, False when user can select cells
         self.constraint_drawings = {}
+        self.delete_button_widget = None
 
         self.setWindowTitle("Sudoku Solver")
         self.cell_size = 60
@@ -785,9 +815,9 @@ class SudokuGUI(QMainWindow):
                 row1, col1 = constraint.affected_cells[0].row, constraint.affected_cells[0].col
                 row2, col2 = constraint.affected_cells[1].row, constraint.affected_cells[1].col
                 if constraint.type == KropkiTypeEnum.WHITE_DOT:
-                    self.draw_white_kropki(row1, col1, row2, col2)
+                    self.draw_white_kropki(row1, col1, row2, col2, constraint.constraint_id)
                 else:
-                    self.draw_black_kropki(row1, col1, row2, col2)
+                    self.draw_black_kropki(row1, col1, row2, col2, constraint.constraint_id)
             elif isinstance(constraint, KillerCageConstraint):
                 pass
 
@@ -975,6 +1005,7 @@ class SudokuGUI(QMainWindow):
 
         # Create white circle with black outline
         ellipse = QGraphicsEllipseItem(x - 8, y - 8, 16, 16)
+        # ellipse = HoverableEllipse(x - 8, y - 8, 16, 16, self)
         ellipse.setBrush(QBrush(Qt.white))
         ellipse.setPen(QPen(Qt.black, 2))
         ellipse.setZValue(10)  # Above grid lines
@@ -987,7 +1018,7 @@ class SudokuGUI(QMainWindow):
         x, y = self._get_border_position(row1, col1, row2, col2)
 
         # Create white circle with black outline
-        ellipse = QGraphicsEllipseItem(x - 8, y - 8, 16, 16)
+        ellipse = HoverableEllipse(x - 8, y - 8, 16, 16, self)
         ellipse.setBrush(QBrush(Qt.black))
         ellipse.setPen(QPen(Qt.black, 2))
         ellipse.setZValue(10)  # Above grid lines
@@ -1036,4 +1067,123 @@ class SudokuGUI(QMainWindow):
         # text.setZValue(15)
         # self.scene.addItem(text)
     
+    #endregion
+
+    #region Delete Constraints
+    def sceneEventFilter(self, watched, event):
+        #Handles hover events on constraint drawings
+        if event.type() == event.GraphicsSceneHoverEnter:
+            self.show_delete_button(watched)
+        elif event.type() == event.GraphicsSceneHoverLeave:
+            QTimer.singleShot(100, lambda: self.maybe_hide_delete_button(watched))
+
+        return False
+
+    def show_delete_button(self, item):
+        if self.delete_button_widget:
+            self.scene.removeItem(self.delete_button_widget)
+
+        delete_btn = QPushButton("x")
+        delete_btn.setFixedSize(20, 20)
+        delete_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+            """
+        )
+        delete_btn.clicked.connect(lambda: self.delete_constraint_item(item))
+
+        #Add button as a proxy widget
+        proxy = QGraphicsProxyWidget()
+        proxy.setWidget(delete_btn)
+
+        rect = item.boundingRect()
+        proxy.setPos(rect.x() + rect.width() + 5, rect.y() - 10)
+        proxy.setZValue(20)
+
+        self.scene.addItem(proxy)
+        self.delete_button_widget = proxy
+
+        #Keeps button visible when hovering over it
+        proxy.acceptHoverEvents()
+
+    def maybe_hide_delete_button(self, item):
+        if self.delete_button_widget:
+            cursor_pos = self.view.mapFromGlobal(QCursor.pos())
+            scene_pos = self.view.mapToScene(cursor_pos)
+            
+            items_under_cursor = self.scene.items(scene_pos)
+
+            if item not in items_under_cursor and self.delete_button_widget not in items_under_cursor:
+                self.scene.removeItem(self.delete_button_widget)
+                self.delete_button_widget = None
+
+    def delete_constraint_item(self, item):
+        to_remove = None
+        for id, stored_item in self.constraint_drawings.items():
+            if isinstance(stored_item, list):
+                if item in stored_item:
+                    for i in stored_item:
+                        self.scene.removeItem(i)
+                    to_remove = id
+                    break
+            else:
+                if stored_item == item:
+                    self.scene.removeItem(item)
+                    to_remove = id
+                    break
+
+        #Find constraint
+        constraint = None
+        for c in self.sudoku_board.constraints:
+            if c.constraint_id == to_remove:
+                constraint = c
+                break
+
+        if not constraint:
+            print(f"Warning: Constraint with ID {to_remove} not found in board")
+            # Still remove from drawings
+            if to_remove in self.constraint_drawings:
+                del self.constraint_drawings[to_remove]
+            return
+        
+        for cell in constraint.affected_cells:
+            cell.constraints = [c for c in cell.constraints if c.constraint_id != to_remove]
+
+        self.sudoku_board.constraints = [
+            c for c in self.sudoku_board.constraints 
+            if c.constraint_id != to_remove
+        ]   
+
+        # #Remove constraint from cells
+        # for cell in constraint.affected_cells:
+        #     for i, cell_constraint in enumerate(cell.constraints):
+        #         if cell_constraint.constraint_id == to_remove:
+        #             cell.constraints.pop(i)
+        #             break
+
+        # #Remove constraint from board
+        # for i, board_constraint in enumerate(self.sudoku_board.constraints):
+        #     if board_constraint.constraint_id == to_remove:
+        #         self.sudoku_board.constraints.pop(i)
+        #         break
+
+        if to_remove:
+            del self.constraint_drawings[to_remove]
+        
+        # Remove delete button
+        if self.delete_button_widget:
+            self.scene.removeItem(self.delete_button_widget)
+            self.delete_button_widget = None
+        
+        self.refresh()
     #endregion
