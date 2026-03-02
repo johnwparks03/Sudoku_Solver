@@ -1,3 +1,4 @@
 .prettierignore
 __pycache__/
 settings.json
+.venv/
